@@ -1,22 +1,30 @@
-use std::process::Command;
+use crate::GitConfig;
 use actix_web::http::header::HeaderValue;
 use actix_web::http::StatusCode;
 use actix_web::{web, HttpRequest, HttpResponseBuilder, Responder};
+use std::process::Command;
 use tracing::info;
-use crate::actix::handler::ActixGitHttp;
 
-pub async fn info_refs(request: HttpRequest, service: web::Data<ActixGitHttp>) -> impl Responder {
+pub async fn info_refs(request: HttpRequest, service: web::Data<impl GitConfig>) -> impl Responder {
     let uri = request.uri();
-    let path = uri.path().to_string().replace("/info/refs","");
-    let path = service.rewrite(path);
+    let path = uri.path().to_string().replace("/info/refs", "");
+    let path = service.rewrite(path).await;
     let query = uri.query().unwrap_or("");
-    let service = query.split('=').map(|x|x.to_string()).collect::<Vec<_>>();
+    let service = query.split('=').map(|x| x.to_string()).collect::<Vec<_>>();
     let service = service[1].clone();
-    if !(service != "git-upload-pack" || service != "git-receive-pack"){
-        return Err(actix_web::error::ErrorUnsupportedMediaType("service not git-upload-pack"));
+    if !(service != "git-upload-pack" || service != "git-receive-pack") {
+        return Err(actix_web::error::ErrorUnsupportedMediaType(
+            "service not git-upload-pack",
+        ));
     }
     let service_name = service.replace("git-", "");
-    let version = request.headers().get("Git-Protocol").unwrap_or(&HeaderValue::from_str("").unwrap()).to_str().map(|s| s.to_string()).unwrap_or("".to_string());
+    let version = request
+        .headers()
+        .get("Git-Protocol")
+        .unwrap_or(&HeaderValue::from_str("").unwrap())
+        .to_str()
+        .map(|s| s.to_string())
+        .unwrap_or("".to_string());
     let mut cmd = Command::new("git");
     cmd.arg(service_name.clone());
     cmd.arg("--stateless-rpc");
@@ -28,20 +36,25 @@ pub async fn info_refs(request: HttpRequest, service: web::Data<ActixGitHttp>) -
     }
 
     let output = match cmd.output() {
-        Ok(output) =>{
+        Ok(output) => {
             info!("Command status: {:?}", output.status);
             output
-        },
+        }
         Err(e) => {
             eprintln!("Error running command: {}", e);
-            return Err(actix_web::error::ErrorInternalServerError("Error running command"));
+            return Err(actix_web::error::ErrorInternalServerError(
+                "Error running command",
+            ));
         }
     };
     let mut resp = HttpResponseBuilder::new(StatusCode::OK);
-    resp.append_header(("Content-Type", format!("application/x-git-{}-advertisement", service_name)));
-    resp.append_header(("Pragma","no-cache"));
-    resp.append_header(("Cache-Control","no-cache, max-age=0, must-revalidate"));
-    resp.append_header(("Expires","Fri, 01 Jan 1980 00:00:00 GMT"));
+    resp.append_header((
+        "Content-Type",
+        format!("application/x-git-{}-advertisement", service_name),
+    ));
+    resp.append_header(("Pragma", "no-cache"));
+    resp.append_header(("Cache-Control", "no-cache, max-age=0, must-revalidate"));
+    resp.append_header(("Expires", "Fri, 01 Jan 1980 00:00:00 GMT"));
 
     let mut body = String::new();
 
@@ -49,11 +62,11 @@ pub async fn info_refs(request: HttpRequest, service: web::Data<ActixGitHttp>) -
         "upload-pack" => {
             body.push_str(&"001e# service=git-upload-pack\n".to_string());
             body.push_str("0000");
-        },
+        }
         "receive-pack" => {
             body.push_str(&"001f# service=git-receive-pack\n".to_string());
             body.push_str("0000");
-        },
+        }
         _ => {}
     }
     body.push_str(&String::from_utf8(output.stdout).unwrap());

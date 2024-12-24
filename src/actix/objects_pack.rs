@@ -1,4 +1,4 @@
-use crate::actix::handler::ActixGitHttp;
+use crate::GitConfig;
 use actix_files::NamedFile;
 use actix_web::cookie::time;
 use actix_web::cookie::time::format_description;
@@ -7,16 +7,31 @@ use actix_web::http::header::HeaderValue;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use std::collections::HashMap;
 
-pub async fn objects_pack(request: HttpRequest, service: web::Data<ActixGitHttp>) -> impl Responder {
+pub async fn objects_pack(
+    request: HttpRequest,
+    service: web::Data<impl GitConfig>,
+) -> impl Responder {
     let uri = request.uri();
     let path = uri.path().to_string();
-    let req_file = service.rewrite(path);
+    let req_file = service.rewrite(path).await;
     let mut map = HashMap::new();
     let time = time::OffsetDateTime::now_utc();
     let expires = time::OffsetDateTime::now_utc() + time::Duration::days(1);
-    map.insert("Date".to_string(), time.format(&format_description::parse("%a, %d %b %Y %H:%M:%S GMT").unwrap()).unwrap());
-    map.insert("Expires".to_string(), expires.format(&format_description::parse("%a, %d %b %Y %H:%M:%S GMT").unwrap()).unwrap());
-    map.insert("Cache-Control".to_string(), "public, max-age=86400".to_string());
+    map.insert(
+        "Date".to_string(),
+        time.format(&format_description::parse("%a, %d %b %Y %H:%M:%S GMT").unwrap())
+            .unwrap(),
+    );
+    map.insert(
+        "Expires".to_string(),
+        expires
+            .format(&format_description::parse("%a, %d %b %Y %H:%M:%S GMT").unwrap())
+            .unwrap(),
+    );
+    map.insert(
+        "Cache-Control".to_string(),
+        "public, max-age=86400".to_string(),
+    );
     #[allow(unused_assignments)]
     let mut xtype = "application/x-git-loose-object".to_string();
     if uri.to_string().ends_with(".pack") {
@@ -40,13 +55,11 @@ pub async fn objects_pack(request: HttpRequest, service: web::Data<ActixGitHttp>
                 );
             }
 
-            response.headers_mut().insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_str(&xtype).unwrap(),
-            );
+            response
+                .headers_mut()
+                .insert(header::CONTENT_TYPE, HeaderValue::from_str(&xtype).unwrap());
             response
         }
         Err(_) => HttpResponse::InternalServerError().body("Failed to open file"),
     }
-
 }

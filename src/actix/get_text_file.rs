@@ -1,18 +1,27 @@
-use crate::actix::handler::ActixGitHttp;
+use crate::GitConfig;
 use actix_files::NamedFile;
 use actix_web::http::header;
 use actix_web::http::header::HeaderValue;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use std::collections::HashMap;
 
-pub async fn get_text_file(request: HttpRequest, service: web::Data<ActixGitHttp>) -> impl Responder{
+pub async fn get_text_file(
+    request: HttpRequest,
+    service: web::Data<impl GitConfig>,
+) -> impl Responder {
     let uri = request.uri();
     let path = uri.path().to_string();
-    let path = service.rewrite(path);
+    let path = service.rewrite(path).await;
     let mut resp = HashMap::new();
-    resp.insert("Pragma".to_string(),"no-cache".to_string());
-    resp.insert("Cache-Control".to_string(),"no-cache, max-age=0, must-revalidate".to_string());
-    resp.insert("Expires".to_string(),"Fri, 01 Jan 1980 00:00:00 GMT".to_string());
+    resp.insert("Pragma".to_string(), "no-cache".to_string());
+    resp.insert(
+        "Cache-Control".to_string(),
+        "no-cache, max-age=0, must-revalidate".to_string(),
+    );
+    resp.insert(
+        "Expires".to_string(),
+        "Fri, 01 Jan 1980 00:00:00 GMT".to_string(),
+    );
     if !path.exists() {
         return HttpResponse::NotFound().body("File not found");
     }

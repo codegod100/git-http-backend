@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 /// git http server config
-#[derive(Clone)]
-pub struct GitHttpConfig{
+#[derive(Clone,Debug)]
+pub struct GitHttpConfig {
     /// git repository root
     pub root: PathBuf,
     /// git http server port

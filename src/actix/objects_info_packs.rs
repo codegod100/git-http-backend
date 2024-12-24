@@ -1,4 +1,4 @@
-use crate::actix::handler::ActixGitHttp;
+use crate::GitConfig;
 use actix_files::NamedFile;
 use actix_web::cookie::time;
 use actix_web::cookie::time::format_description;
@@ -7,19 +7,32 @@ use actix_web::http::header::HeaderValue;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use std::collections::HashMap;
 
-pub async fn objects_info_packs(request: HttpRequest, service: web::Data<ActixGitHttp>)
-                                -> 
-    impl Responder {
+pub async fn objects_info_packs(
+    request: HttpRequest,
+    service: web::Data<impl GitConfig>,
+) -> impl Responder {
     let uri = request.uri();
     let path = uri.path().to_string();
-    let repo_path = service.rewrite(path);
+    let repo_path = service.rewrite(path).await;
     let path = "objects/info/packs".to_string();
     let mut map = HashMap::new();
     let time = time::OffsetDateTime::now_utc();
     let expires = time::OffsetDateTime::now_utc() + time::Duration::days(1);
-    map.insert("Date".to_string(), time.format(&format_description::parse("%a, %d %b %Y %H:%M:%S GMT").unwrap()).unwrap());
-    map.insert("Expires".to_string(), expires.format(&format_description::parse("%a, %d %b %Y %H:%M:%S GMT").unwrap()).unwrap());
-    map.insert("Cache-Control".to_string(), "public, max-age=86400".to_string());
+    map.insert(
+        "Date".to_string(),
+        time.format(&format_description::parse("%a, %d %b %Y %H:%M:%S GMT").unwrap())
+            .unwrap(),
+    );
+    map.insert(
+        "Expires".to_string(),
+        expires
+            .format(&format_description::parse("%a, %d %b %Y %H:%M:%S GMT").unwrap())
+            .unwrap(),
+    );
+    map.insert(
+        "Cache-Control".to_string(),
+        "public, max-age=86400".to_string(),
+    );
     let req_file = repo_path.join(path);
     if !req_file.exists() {
         return HttpResponse::NotFound().body("File not found");

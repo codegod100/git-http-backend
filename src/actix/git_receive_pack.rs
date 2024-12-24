@@ -1,22 +1,22 @@
+use crate::GitConfig;
+use actix_web::http::{header, StatusCode};
+use actix_web::web::Payload;
+use actix_web::{web, HttpRequest, HttpResponse, HttpResponseBuilder, Responder};
+use flate2::read::GzDecoder;
+use futures_util::StreamExt;
 use std::io;
 use std::io::{Cursor, Read, Write};
 use std::process::{Command, Stdio};
-use actix_web::{web, HttpRequest, HttpResponse, HttpResponseBuilder, Responder};
-use actix_web::http::{header, StatusCode};
-use actix_web::web::Payload;
-use flate2::read::GzDecoder;
-use futures_util::StreamExt;
 use tracing::info;
-use crate::actix::handler::ActixGitHttp;
 
 pub async fn git_receive_pack(
     request: HttpRequest,
     mut payload: Payload,
-    service: web::Data<ActixGitHttp>,
+    service: web::Data<impl GitConfig>,
 ) -> impl Responder {
     let uri = request.uri();
-    let path = uri.path().to_string().replace("/git-receive-pack","");
-    let path = service.rewrite(path);
+    let path = uri.path().to_string().replace("/git-receive-pack", "");
+    let path = service.rewrite(path).await;
     if !path.join("HEAD").exists() || !path.join("config").exists() {
         return HttpResponse::BadRequest().body("Repository not found or invalid.");
     }
@@ -69,7 +69,10 @@ pub async fn git_receive_pack(
     while let Some(chunk) = payload.next().await {
         match chunk {
             Ok(data) => bytes.extend_from_slice(&data),
-            Err(e) => return HttpResponse::InternalServerError().body(format!("Failed to read request body: {}", e)),
+            Err(e) => {
+                return HttpResponse::InternalServerError()
+                    .body(format!("Failed to read request body: {}", e))
+            }
         }
     }
 
@@ -82,7 +85,8 @@ pub async fn git_receive_pack(
             let mut decoder = GzDecoder::new(Cursor::new(bytes));
             let mut decoded_data = Vec::new();
             if let Err(e) = io::copy(&mut decoder, &mut decoded_data) {
-                return HttpResponse::InternalServerError().body(format!("Failed to decode gzip body: {}", e));
+                return HttpResponse::InternalServerError()
+                    .body(format!("Failed to decode gzip body: {}", e));
             }
             decoded_data
         }
@@ -90,9 +94,10 @@ pub async fn git_receive_pack(
     };
 
     if let Err(e) = stdin.write_all(&body_data) {
-        return HttpResponse::InternalServerError().body(format!("Failed to write to git process: {}", e));
+        return HttpResponse::InternalServerError()
+            .body(format!("Failed to write to git process: {}", e));
     }
-    drop(stdin); 
+    drop(stdin);
 
     let body_stream = actix_web::body::BodyStream::new(async_stream::stream! {
         let mut buffer = [0; 8192];
