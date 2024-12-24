@@ -1,6 +1,6 @@
 [package]
 name = "git-http-backend"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["ZhenArch <256814605@qq.com>"]
 license = "MIT"
