@@ -1,0 +1,27 @@
+[package]
+name = "git-http-backend"
+version = "0.1.0"
+edition = "2021"
+authors = ["ZhenArch <256814605@qq.com>"]
+license = "MIT"
+repository = "https://github.com/ZhenArch/git-http-backend"
+description = "A simple git http backend server written in rust"
+keywords = ["git", "http", "backend", "server"]
+readme = "README.md"
+homepage = "https://github.com/ZhenArch/git-http-backend"
+
+
+[[bin]]
+name = "server"
+path = "src/server.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["sync","macros","rt", "rt-multi-thread","net" ] }
+actix-web = { version = "4.9.0", features = ["default"] }
+actix-files = { version = "0.6.6", features = ["actix-server"] }
+futures-util = { version = "0.3.31" ,features = ["futures-channel"] }
+clap = { version = "4.5.23", features = ["derive"] }
+tracing = { version = "0.1.41", features = [] }
+tracing-subscriber = { version = "0.3.19", features = [] }
+flate2 = "1.0.35"
+async-stream = "0.3.6"
