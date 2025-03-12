@@ -7,6 +7,7 @@ use crate::actix::refs::info_refs;
 use crate::GitConfig;
 use actix_web::web::Data;
 use actix_web::{web, HttpRequest};
+use tracing::info;
 
 /// Actix-web DataServer
 pub mod handler;
@@ -30,6 +31,7 @@ pub fn router<T>(cfg: &mut web::ServiceConfig)
 where
     T: GitConfig + 'static,
 {
+    // info!("Using config: {:#?}", cfg);
     cfg.service(
         web::scope("/{namespace}/{repo}")
             .route(

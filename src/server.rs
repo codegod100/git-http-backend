@@ -38,7 +38,7 @@ pub async fn main() -> io::Result<()> {
             .wrap(actix_web::middleware::Logger::default())
             .configure(|x| actix_git_router::<ActixGitHttp>(x))
     })
-    .bind("0.0.0.0:80")?
+    .bind("0.0.0.0:4545")?
     .run()
     .await?;
     Ok(())

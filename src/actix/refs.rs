@@ -30,7 +30,8 @@ pub async fn info_refs(request: HttpRequest, service: web::Data<impl GitConfig>)
     cmd.arg("--stateless-rpc");
     cmd.arg("--advertise-refs");
     cmd.arg(".");
-    cmd.current_dir(path);
+    cmd.current_dir(&path);
+    info!("Running command: {:?} with path: {:#?}", cmd, &path);
     if !version.is_empty() {
         cmd.env("GIT_PROTOCOL", version.clone());
     }

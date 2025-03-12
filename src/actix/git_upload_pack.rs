@@ -8,6 +8,7 @@ use futures_util::StreamExt;
 use std::io;
 use std::io::{Cursor, Read, Write};
 use std::process::{Command, Stdio};
+use tracing::info;
 
 pub async fn git_upload_pack(
     request: HttpRequest,
@@ -16,6 +17,7 @@ pub async fn git_upload_pack(
 ) -> impl Responder {
     let uri = request.uri();
     let path = uri.path().to_string().replace("/git-upload-pack", "");
+    info!("Handling git-upload-pack request for path: {}", path);
     let path = service.rewrite(path).await;
     let version = request
         .headers()
