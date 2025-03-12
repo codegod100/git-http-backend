@@ -2319,6 +2319,10 @@ class Login extends LitElement {
   }
   static styles = css``;
   render() {
+    let link;
+    if (this.authUrl) {
+      link = html`<a href="${this.authUrl}">Login</a>`;
+    }
     return html`
       <input
         @input=${this.handleInput}
@@ -2326,12 +2330,13 @@ class Login extends LitElement {
         placeholder="Enter your atproto handle"
       />
       <button @click="${this._submit}">Submit</button>
-      <a href="${this.authUrl}">Login</a>
+      ${link}
     `;
   }
   handleInput(event) {
     const inputElement = event.target;
     this.handle = inputElement.value;
+    localStorage.setItem("handle", this.handle);
     console.log("Handle:", this.handle);
   }
   async _submit() {
@@ -2365,5 +2370,17 @@ Callback = __legacyDecorateClassTS([
   customElement("callback-")
 ], Callback);
 
-//# debugId=AA7C7D618A13E4A164756E2164756E21
+class Root extends LitElement {
+  static styles = css``;
+  render() {
+    console.log("Attempting to list folders in", my_folder);
+    listFolders();
+    return html` <div>Your repos: ${my_folder}</div> `;
+  }
+}
+Root = __legacyDecorateClassTS([
+  customElement("root-")
+], Root);
+
+//# debugId=6502DA220BA34EA464756E2164756E21
 //# sourceMappingURL=index.js.map

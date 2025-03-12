@@ -1,4 +1,5 @@
-import { LitElement, css, html } from "lit";
+import { LitElement, TemplateResult, css, html } from "lit";
+
 import { customElement, state, property } from "lit/decorators.js";
 import {
   configureOAuth,
@@ -57,6 +58,10 @@ export class Login extends LitElement {
 
   // Render the UI as a function of component state
   render() {
+    let link;
+    if (this.authUrl) {
+      link = html`<a href="${this.authUrl}">Login</a>`;
+    }
     return html`
       <input
         @input=${this.handleInput}
@@ -64,13 +69,14 @@ export class Login extends LitElement {
         placeholder="Enter your atproto handle"
       />
       <button @click="${this._submit}">Submit</button>
-      <a href="${this.authUrl}">Login</a>
+      ${link}
     `;
   }
 
   handleInput(event: Event) {
     const inputElement = event.target as HTMLInputElement;
     this.handle = inputElement.value;
+    localStorage.setItem("handle", this.handle);
     console.log("Handle:", this.handle);
   }
 
@@ -94,5 +100,18 @@ export class Callback extends LitElement {
   // Render the UI as a function of component state
   render() {
     return html` <h1>Callback</h1> `;
+  }
+}
+
+@customElement("root-")
+export class Root extends LitElement {
+  static styles = css``;
+  // Render the UI as a function of component state
+  render() {
+    console.log("Attempting to list folders in", my_folder);
+
+    // Call the function immediately
+    listFolders();
+    return html` <div>Your repos: ${my_folder}</div> `;
   }
 }
