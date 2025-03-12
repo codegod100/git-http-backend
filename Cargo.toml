@@ -26,3 +26,5 @@ tracing-subscriber = { version = "0.3.19", features = [] }
 flate2 = "1.0.35"
 async-stream = "0.3.6"
 async-trait = "0.1.83"
+reqwest = { version = "0.12.13", features = ["json"] }
+serde = { version = "1.0.219", features = ["derive"] }

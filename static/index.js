@@ -1437,6 +1437,227 @@ polyfillSupport3?.({ LitElement });
 if (DEV_MODE3 && globalThis.litElementVersions.length > 1) {
   issueWarning3("multiple-versions", `Multiple versions of Lit loaded. Loading multiple versions ` + `is not recommended.`);
 }
+// node_modules/@lit/task/development/task.js
+var TaskStatus = {
+  INITIAL: 0,
+  PENDING: 1,
+  COMPLETE: 2,
+  ERROR: 3
+};
+var initialState = Symbol();
+
+class Task {
+  get taskComplete() {
+    if (this._taskComplete) {
+      return this._taskComplete;
+    }
+    if (this._status === TaskStatus.PENDING) {
+      this._taskComplete = new Promise((res, rej) => {
+        this._resolveTaskComplete = res;
+        this._rejectTaskComplete = rej;
+      });
+    } else if (this._status === TaskStatus.ERROR) {
+      this._taskComplete = Promise.reject(this._error);
+    } else {
+      this._taskComplete = Promise.resolve(this._value);
+    }
+    return this._taskComplete;
+  }
+  constructor(host, task, args) {
+    this._callId = 0;
+    this._status = TaskStatus.INITIAL;
+    (this._host = host).addController(this);
+    const taskConfig = typeof task === "object" ? task : { task, args };
+    this._task = taskConfig.task;
+    this._argsFn = taskConfig.args;
+    this._argsEqual = taskConfig.argsEqual ?? shallowArrayEquals;
+    this._onComplete = taskConfig.onComplete;
+    this._onError = taskConfig.onError;
+    this.autoRun = taskConfig.autoRun ?? true;
+    if ("initialValue" in taskConfig) {
+      this._value = taskConfig.initialValue;
+      this._status = TaskStatus.COMPLETE;
+      this._previousArgs = this._getArgs?.();
+    }
+  }
+  hostUpdate() {
+    if (this.autoRun === true) {
+      this._performTask();
+    }
+  }
+  hostUpdated() {
+    if (this.autoRun === "afterUpdate") {
+      this._performTask();
+    }
+  }
+  _getArgs() {
+    if (this._argsFn === undefined) {
+      return;
+    }
+    const args = this._argsFn();
+    if (!Array.isArray(args)) {
+      throw new Error("The args function must return an array");
+    }
+    return args;
+  }
+  async _performTask() {
+    const args = this._getArgs();
+    const prev = this._previousArgs;
+    this._previousArgs = args;
+    if (args !== prev && args !== undefined && (prev === undefined || !this._argsEqual(prev, args))) {
+      await this.run(args);
+    }
+  }
+  async run(args) {
+    args ??= this._getArgs();
+    this._previousArgs = args;
+    if (this._status === TaskStatus.PENDING) {
+      this._abortController?.abort();
+    } else {
+      this._taskComplete = undefined;
+      this._resolveTaskComplete = undefined;
+      this._rejectTaskComplete = undefined;
+    }
+    this._status = TaskStatus.PENDING;
+    let result;
+    let error;
+    if (this.autoRun === "afterUpdate") {
+      queueMicrotask(() => this._host.requestUpdate());
+    } else {
+      this._host.requestUpdate();
+    }
+    const key = ++this._callId;
+    this._abortController = new AbortController;
+    let errored = false;
+    try {
+      result = await this._task(args, { signal: this._abortController.signal });
+    } catch (e) {
+      errored = true;
+      error = e;
+    }
+    if (this._callId === key) {
+      if (result === initialState) {
+        this._status = TaskStatus.INITIAL;
+      } else {
+        if (errored === false) {
+          try {
+            this._onComplete?.(result);
+          } catch {
+          }
+          this._status = TaskStatus.COMPLETE;
+          this._resolveTaskComplete?.(result);
+        } else {
+          try {
+            this._onError?.(error);
+          } catch {
+          }
+          this._status = TaskStatus.ERROR;
+          this._rejectTaskComplete?.(error);
+        }
+        this._value = result;
+        this._error = error;
+      }
+      this._host.requestUpdate();
+    }
+  }
+  abort(reason) {
+    if (this._status === TaskStatus.PENDING) {
+      this._abortController?.abort(reason);
+    }
+  }
+  get value() {
+    return this._value;
+  }
+  get error() {
+    return this._error;
+  }
+  get status() {
+    return this._status;
+  }
+  render(renderer) {
+    switch (this._status) {
+      case TaskStatus.INITIAL:
+        return renderer.initial?.();
+      case TaskStatus.PENDING:
+        return renderer.pending?.();
+      case TaskStatus.COMPLETE:
+        return renderer.complete?.(this.value);
+      case TaskStatus.ERROR:
+        return renderer.error?.(this.error);
+      default:
+        throw new Error(`Unexpected status: ${this._status}`);
+    }
+  }
+}
+var shallowArrayEquals = (oldArgs, newArgs) => oldArgs === newArgs || oldArgs.length === newArgs.length && oldArgs.every((v, i) => !notEqual(v, newArgs[i]));
+// node_modules/@std/ulid/_util.js
+var ENCODING = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+var ENCODING_LEN = ENCODING.length;
+var TIME_MAX = Math.pow(2, 48) - 1;
+var TIME_LEN = 10;
+var RANDOM_LEN = 16;
+var ULID_LEN = TIME_LEN + RANDOM_LEN;
+function replaceCharAt(str, index, char) {
+  return str.substring(0, index) + char + str.substring(index + 1);
+}
+function encodeTime(timestamp) {
+  if (!Number.isInteger(timestamp) || timestamp < 0 || timestamp > TIME_MAX) {
+    throw new RangeError(`Time must be a positive integer less than ${TIME_MAX}`);
+  }
+  let str = "";
+  for (let len = TIME_LEN;len > 0; len--) {
+    const mod = timestamp % ENCODING_LEN;
+    str = ENCODING[mod] + str;
+    timestamp = Math.floor(timestamp / ENCODING_LEN);
+  }
+  return str;
+}
+function encodeRandom() {
+  let str = "";
+  const bytes = crypto.getRandomValues(new Uint8Array(RANDOM_LEN));
+  for (const byte of bytes) {
+    str += ENCODING[byte % ENCODING_LEN];
+  }
+  return str;
+}
+function incrementBase32(str) {
+  let index = str.length;
+  let char;
+  let charIndex;
+  const maxCharIndex = ENCODING_LEN - 1;
+  while (--index >= 0) {
+    char = str[index];
+    charIndex = ENCODING.indexOf(char);
+    if (charIndex === -1) {
+      throw new TypeError("Incorrectly encoded string");
+    }
+    if (charIndex === maxCharIndex) {
+      str = replaceCharAt(str, index, ENCODING[0]);
+      continue;
+    }
+    return replaceCharAt(str, index, ENCODING[charIndex + 1]);
+  }
+  throw new Error("Cannot increment this string");
+}
+function monotonicFactory(encodeRand = encodeRandom) {
+  let lastTime = 0;
+  let lastRandom;
+  return function ulid(seedTime = Date.now()) {
+    if (seedTime <= lastTime) {
+      const incrementedRandom = lastRandom = incrementBase32(lastRandom);
+      return encodeTime(lastTime) + incrementedRandom;
+    }
+    lastTime = seedTime;
+    const newRandom = lastRandom = encodeRand();
+    return encodeTime(seedTime) + newRandom;
+  };
+}
+// node_modules/@std/ulid/monotonic_ulid.js
+var defaultMonotonicUlid = monotonicFactory();
+// node_modules/@std/ulid/ulid.js
+function ulid(seedTime = Date.now()) {
+  return encodeTime(seedTime) + encodeRandom();
+}
 // node_modules/@lit/reactive-element/development/decorators/custom-element.js
 var customElement = (tagName) => (classOrTarget, context) => {
   if (context !== undefined) {
@@ -2208,6 +2429,48 @@ class OAuthServerAgent {
 
 // node_modules/@atcute/oauth-browser-client/dist/agents/sessions.js
 var pending = new Map;
+var getSession = async (sub, options) => {
+  options?.signal?.throwIfAborted();
+  let allowStored = isTokenUsable;
+  if (options?.noCache) {
+    allowStored = returnFalse;
+  } else if (options?.allowStale) {
+    allowStored = returnTrue;
+  }
+  let previousExecutionFlow;
+  while (previousExecutionFlow = pending.get(sub)) {
+    try {
+      const { isFresh, value: value2 } = await previousExecutionFlow;
+      if (isFresh || allowStored(value2)) {
+        return value2;
+      }
+    } catch {
+    }
+    options?.signal?.throwIfAborted();
+  }
+  const run = async () => {
+    const storedSession = database.sessions.get(sub);
+    if (storedSession && allowStored(storedSession)) {
+      return { isFresh: false, value: storedSession };
+    }
+    const newSession = await refreshToken(sub, storedSession);
+    await storeSession(sub, newSession);
+    return { isFresh: true, value: newSession };
+  };
+  let promise;
+  if (locks) {
+    promise = locks.request(`atcute-oauth:${sub}`, run);
+  } else {
+    promise = run();
+  }
+  promise = promise.finally(() => pending.delete(sub));
+  if (pending.has(sub)) {
+    throw new Error("concurrent request for the same key");
+  }
+  pending.set(sub, promise);
+  const { value } = await promise;
+  return value;
+};
 var storeSession = async (sub, newSession) => {
   try {
     database.sessions.set(sub, newSession);
@@ -2216,9 +2479,34 @@ var storeSession = async (sub, newSession) => {
     throw err;
   }
 };
+var deleteStoredSession = (sub) => {
+  database.sessions.delete(sub);
+};
+var returnTrue = () => true;
+var returnFalse = () => false;
+var refreshToken = async (sub, storedSession) => {
+  if (storedSession === undefined) {
+    throw new TokenRefreshError(sub, `session deleted by another tab`);
+  }
+  const { dpopKey, info, token } = storedSession;
+  const server = new OAuthServerAgent(info.server, dpopKey);
+  try {
+    const newToken = await server.refresh({ sub: info.sub, token });
+    return { dpopKey, info, token: newToken };
+  } catch (cause) {
+    if (cause instanceof OAuthResponseError && cause.status === 400 && cause.error === "invalid_grant") {
+      throw new TokenRefreshError(sub, `session was revoked`, { cause });
+    }
+    throw cause;
+  }
+};
 var onRefreshError = async ({ dpopKey, info, token }) => {
   const server = new OAuthServerAgent(info.server, dpopKey);
   await server.revoke(token.refresh ?? token.access);
+};
+var isTokenUsable = ({ token }) => {
+  const expires = token.expires_at;
+  return expires == null || Date.now() + 60000 <= expires;
 };
 
 // node_modules/@atcute/oauth-browser-client/dist/agents/exchange.js
@@ -2283,7 +2571,423 @@ var finalizeAuthorization = async (params) => {
   await storeSession(sub, session);
   return session;
 };
+// node_modules/@atcute/oauth-browser-client/dist/agents/user-agent.js
+class OAuthUserAgent {
+  session;
+  #fetch;
+  #getSessionPromise;
+  constructor(session) {
+    this.session = session;
+    this.#fetch = createDPoPFetch(CLIENT_ID, session.dpopKey, false);
+  }
+  get sub() {
+    return this.session.info.sub;
+  }
+  getSession(options) {
+    const promise = getSession(this.session.info.sub, options);
+    promise.then((session) => {
+      this.session = session;
+    }).finally(() => {
+      this.#getSessionPromise = undefined;
+    });
+    return this.#getSessionPromise = promise;
+  }
+  async signOut() {
+    const sub = this.session.info.sub;
+    try {
+      const { dpopKey, info, token } = await getSession(sub, { allowStale: true });
+      const server = new OAuthServerAgent(info.server, dpopKey);
+      await server.revoke(token.refresh ?? token.access);
+    } finally {
+      deleteStoredSession(sub);
+    }
+  }
+  async handle(pathname, init) {
+    await this.#getSessionPromise;
+    const headers = new Headers(init?.headers);
+    let session = this.session;
+    let url = new URL(pathname, session.info.aud);
+    headers.set("authorization", `${session.token.type} ${session.token.access}`);
+    let response = await this.#fetch(url, { ...init, headers });
+    if (!isInvalidTokenResponse(response)) {
+      return response;
+    }
+    try {
+      if (this.#getSessionPromise) {
+        session = await this.#getSessionPromise;
+      } else {
+        session = await this.getSession();
+      }
+    } catch {
+      return response;
+    }
+    if (init?.body instanceof ReadableStream) {
+      return response;
+    }
+    url = new URL(pathname, session.info.aud);
+    headers.set("authorization", `${session.token.type} ${session.token.access}`);
+    return await this.#fetch(url, { ...init, headers });
+  }
+}
+var isInvalidTokenResponse = (response) => {
+  if (response.status !== 401) {
+    return false;
+  }
+  const auth = response.headers.get("www-authenticate");
+  return auth != null && (auth.startsWith("Bearer ") || auth.startsWith("DPoP ")) && auth.includes('error="invalid_token"');
+};
+// node_modules/@atcute/client/dist/fetch-handler.js
+var buildFetchHandler = (handler) => {
+  if (typeof handler === "object") {
+    return handler.handle.bind(handler);
+  }
+  return handler;
+};
+var simpleFetchHandler = ({ service, fetch: _fetch = fetch }) => {
+  return async (pathname, init) => {
+    const url = new URL(pathname, service);
+    return _fetch(url, init);
+  };
+};
+
+// node_modules/@atcute/client/dist/utils/http.js
+var mergeHeaders = (init, defaults) => {
+  let headers;
+  for (const name in defaults) {
+    const value = defaults[name];
+    if (value !== null) {
+      headers ??= new Headers(init);
+      if (!headers.has(name)) {
+        headers.set(name, value);
+      }
+    }
+  }
+  return headers ?? init;
+};
+
+// node_modules/@atcute/client/dist/rpc.js
+class XRPCError extends Error {
+  constructor(status, { kind = `HTTP error ${status}`, description = `Unspecified error description`, headers, cause } = {}) {
+    super(`${kind} > ${description}`, { cause });
+    this.name = "XRPCError";
+    this.status = status;
+    this.kind = kind;
+    this.description = description;
+    this.headers = headers || {};
+  }
+}
+
+class XRPC {
+  constructor({ handler, proxy }) {
+    this.handle = buildFetchHandler(handler);
+    this.proxy = proxy;
+  }
+  get(nsid, options) {
+    return this.request({ type: "get", nsid, ...options });
+  }
+  call(nsid, options) {
+    return this.request({ type: "post", nsid, ...options });
+  }
+  async request(options) {
+    const data = options.data;
+    const url = `/xrpc/${options.nsid}` + constructSearchParams(options.params);
+    const isInputJson = isJsonValue(data);
+    const response = await this.handle(url, {
+      method: options.type,
+      signal: options.signal,
+      body: isInputJson ? JSON.stringify(data) : data,
+      headers: mergeHeaders(options.headers, {
+        "content-type": isInputJson ? "application/json" : null,
+        "atproto-proxy": constructProxyHeader(this.proxy)
+      })
+    });
+    const responseStatus = response.status;
+    const responseHeaders = Object.fromEntries(response.headers);
+    const responseType = responseHeaders["content-type"];
+    let promise;
+    let ret;
+    if (responseType) {
+      if (responseType.startsWith("application/json")) {
+        promise = response.json();
+      } else if (responseType.startsWith("text/")) {
+        promise = response.text();
+      }
+    }
+    try {
+      ret = await (promise || response.arrayBuffer().then((buffer) => new Uint8Array(buffer)));
+    } catch (err) {
+      throw new XRPCError(2, {
+        cause: err,
+        kind: "InvalidResponse",
+        description: `Failed to parse response body`,
+        headers: responseHeaders
+      });
+    }
+    if (responseStatus === 200) {
+      return {
+        data: ret,
+        headers: responseHeaders
+      };
+    }
+    if (isErrorResponse(ret)) {
+      throw new XRPCError(responseStatus, {
+        kind: ret.error,
+        description: ret.message,
+        headers: responseHeaders
+      });
+    }
+    throw new XRPCError(responseStatus, { headers: responseHeaders });
+  }
+}
+var constructProxyHeader = (proxy) => {
+  if (proxy) {
+    return `${proxy.service}#${proxy.type}`;
+  }
+  return null;
+};
+var constructSearchParams = (params) => {
+  let searchParams;
+  for (const key in params) {
+    const value = params[key];
+    if (value !== undefined) {
+      searchParams ??= new URLSearchParams;
+      if (Array.isArray(value)) {
+        for (let idx = 0, len = value.length;idx < len; idx++) {
+          const val = value[idx];
+          searchParams.append(key, "" + val);
+        }
+      } else {
+        searchParams.set(key, "" + value);
+      }
+    }
+  }
+  return searchParams ? `?` + searchParams.toString() : "";
+};
+var isJsonValue = (o) => {
+  if (typeof o !== "object" || o === null) {
+    return false;
+  }
+  if ("toJSON" in o) {
+    return true;
+  }
+  const proto = Object.getPrototypeOf(o);
+  return proto === null || proto === Object.prototype;
+};
+var isErrorResponse = (value) => {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const kindType = typeof value.error;
+  const messageType = typeof value.message;
+  return (kindType === "undefined" || kindType === "string") && (messageType === "undefined" || messageType === "string");
+};
+// node_modules/@atcute/client/dist/utils/jwt.js
+var decodeJwt = (token2) => {
+  const pos = 1;
+  const part = token2.split(".")[1];
+  let decoded;
+  if (typeof part !== "string") {
+    throw new Error("invalid token: missing part " + (pos + 1));
+  }
+  try {
+    decoded = base64UrlDecode(part);
+  } catch (e) {
+    throw new Error("invalid token: invalid b64 for part " + (pos + 1) + " (" + e.message + ")");
+  }
+  try {
+    return JSON.parse(decoded);
+  } catch (e) {
+    throw new Error("invalid token: invalid json for part " + (pos + 1) + " (" + e.message + ")");
+  }
+};
+var base64UrlDecode = (str) => {
+  let output = str.replace(/-/g, "+").replace(/_/g, "/");
+  switch (output.length % 4) {
+    case 0:
+      break;
+    case 2:
+      output += "==";
+      break;
+    case 3:
+      output += "=";
+      break;
+    default:
+      throw new Error("base64 string is not of the correct length");
+  }
+  try {
+    return b64DecodeUnicode(output);
+  } catch {
+    return atob(output);
+  }
+};
+var b64DecodeUnicode = (str) => {
+  return decodeURIComponent(atob(str).replace(/(.)/g, (_m, p) => {
+    let code = p.charCodeAt(0).toString(16).toUpperCase();
+    if (code.length < 2) {
+      code = "0" + code;
+    }
+    return "%" + code;
+  }));
+};
+
+// node_modules/@atcute/client/dist/credential-manager.js
+class CredentialManager {
+  #server;
+  #refreshSessionPromise;
+  #onExpired;
+  #onRefresh;
+  #onSessionUpdate;
+  constructor({ service, onExpired, onRefresh, onSessionUpdate, fetch: _fetch = fetch }) {
+    this.serviceUrl = service;
+    this.fetch = _fetch;
+    this.#server = new XRPC({ handler: simpleFetchHandler({ service, fetch: _fetch }) });
+    this.#onRefresh = onRefresh;
+    this.#onExpired = onExpired;
+    this.#onSessionUpdate = onSessionUpdate;
+  }
+  get dispatchUrl() {
+    return this.session?.pdsUri ?? this.serviceUrl;
+  }
+  async handle(pathname, init) {
+    await this.#refreshSessionPromise;
+    const url = new URL(pathname, this.dispatchUrl);
+    const headers = new Headers(init.headers);
+    if (!this.session || headers.has("authorization")) {
+      return (0, this.fetch)(url, init);
+    }
+    headers.set("authorization", `Bearer ${this.session.accessJwt}`);
+    const initialResponse = await (0, this.fetch)(url, { ...init, headers });
+    const isExpired = await isExpiredTokenResponse(initialResponse);
+    if (!isExpired) {
+      return initialResponse;
+    }
+    try {
+      await this.#refreshSession();
+    } catch {
+      return initialResponse;
+    }
+    if (!this.session || init.body instanceof ReadableStream) {
+      return initialResponse;
+    }
+    headers.set("authorization", `Bearer ${this.session.accessJwt}`);
+    return await (0, this.fetch)(url, { ...init, headers });
+  }
+  #refreshSession() {
+    return this.#refreshSessionPromise ||= this.#refreshSessionInner().finally(() => this.#refreshSessionPromise = undefined);
+  }
+  async#refreshSessionInner() {
+    const currentSession = this.session;
+    if (!currentSession) {
+      return;
+    }
+    try {
+      const { data } = await this.#server.call("com.atproto.server.refreshSession", {
+        headers: {
+          authorization: `Bearer ${currentSession.refreshJwt}`
+        }
+      });
+      this.#updateSession({ ...currentSession, ...data });
+      this.#onRefresh?.(this.session);
+    } catch (err) {
+      if (err instanceof XRPCError) {
+        const kind = err.kind;
+        if (kind === "ExpiredToken" || kind === "InvalidToken") {
+          this.session = undefined;
+          this.#onExpired?.(currentSession);
+        }
+      }
+    }
+  }
+  #updateSession(raw) {
+    const didDoc = raw.didDoc;
+    let pdsUri;
+    if (didDoc) {
+      pdsUri = getPdsEndpoint(didDoc);
+    }
+    const newSession = {
+      accessJwt: raw.accessJwt,
+      refreshJwt: raw.refreshJwt,
+      handle: raw.handle,
+      did: raw.did,
+      pdsUri,
+      email: raw.email,
+      emailConfirmed: raw.emailConfirmed,
+      emailAuthFactor: raw.emailConfirmed,
+      active: raw.active ?? true,
+      inactiveStatus: raw.status
+    };
+    this.session = newSession;
+    this.#onSessionUpdate?.(newSession);
+    return newSession;
+  }
+  async resume(session) {
+    const now = Date.now() / 1000 + 60 * 5;
+    const refreshToken2 = decodeJwt(session.refreshJwt);
+    if (now >= refreshToken2.exp) {
+      throw new XRPCError(401, { kind: "InvalidToken" });
+    }
+    const accessToken = decodeJwt(session.accessJwt);
+    this.session = session;
+    if (now >= accessToken.exp) {
+      await this.#refreshSession();
+    } else {
+      const promise = this.#server.get("com.atproto.server.getSession", {
+        headers: {
+          authorization: `Bearer ${session.accessJwt}`
+        }
+      });
+      promise.then((response) => {
+        const existing = this.session;
+        const next = response.data;
+        if (!existing) {
+          return;
+        }
+        this.#updateSession({ ...existing, ...next });
+      });
+    }
+    if (!this.session) {
+      throw new XRPCError(401, { kind: "InvalidToken" });
+    }
+    return this.session;
+  }
+  async login(options) {
+    this.session = undefined;
+    const res = await this.#server.call("com.atproto.server.createSession", {
+      data: {
+        identifier: options.identifier,
+        password: options.password,
+        authFactorToken: options.code,
+        allowTakendown: options.allowTakendown
+      }
+    });
+    return this.#updateSession(res.data);
+  }
+}
+var isExpiredTokenResponse = async (response) => {
+  if (response.status !== 400) {
+    return false;
+  }
+  if (extractContentType2(response.headers) !== "application/json") {
+    return false;
+  }
+  if (extractContentLength(response.headers) > 54 * 1.5) {
+    return false;
+  }
+  try {
+    const { error, message } = await response.clone().json();
+    return error === "ExpiredToken" && (typeof message === "string" || message === undefined);
+  } catch {
+  }
+  return false;
+};
+var extractContentType2 = (headers) => {
+  return headers.get("content-type")?.split(";")[0]?.trim();
+};
+var extractContentLength = (headers) => {
+  return Number(headers.get("content-length") ?? ";");
+};
 // login.ts
+var ws = new WebSocket("ws://localhost:3000/ws");
 console.log("login");
 var enc = encodeURIComponent;
 var url = `http://127.0.0.1:3000`;
@@ -2371,16 +3075,67 @@ Callback = __legacyDecorateClassTS([
 ], Callback);
 
 class Root extends LitElement {
+  constructor() {
+    super(...arguments);
+    this.message = "";
+  }
   static styles = css``;
+  _task = new Task(this, {
+    task: async ([handle], { signal }) => {
+      const response = await fetch(`/repos/${handle}`, {
+        signal
+      });
+      console.log(response);
+      return response.json();
+    },
+    args: () => [localStorage.getItem("handle")]
+  });
   render() {
-    console.log("Attempting to list folders in", my_folder);
-    listFolders();
-    return html` <div>Your repos: ${my_folder}</div> `;
+    ws.onmessage = (event) => {
+      this.message = event.data;
+    };
+    const button = html`<button
+      @click=${async () => {
+      const handle2 = localStorage.getItem("handle");
+      const { identity: identity2 } = await resolveFromIdentity(handle2);
+      const session = await getSession(identity2.id);
+      const agent = new OAuthUserAgent(session);
+      const rpc2 = new XRPC({ handler: agent });
+      const stamp = ulid();
+      const resp = await rpc2.call("com.atproto.repo.putRecord", {
+        data: {
+          repo: handle2,
+          collection: "nandi.schemas.gitauthorize",
+          rkey: stamp,
+          record: {
+            $type: "nandi.schemas.gitauthorize",
+            stamp
+          }
+        }
+      });
+      console.log(resp);
+      console.log("button clicked");
+    }}
+    >
+      Ok
+    </button>`;
+    const handle = localStorage.getItem("handle");
+    return this._task.render({
+      pending: () => html`<div>Loading...</div>`,
+      complete: (result) => html`<div>
+            Hello ${handle}, your existing repos: ${JSON.stringify(result)}
+          </div>
+          ${this.message ? html`<dialog open>${button}</dialog>` : html``}`,
+      error: (e) => html`error: ${e}`
+    });
   }
 }
+__legacyDecorateClassTS([
+  state()
+], Root.prototype, "message", undefined);
 Root = __legacyDecorateClassTS([
   customElement("root-")
 ], Root);
 
-//# debugId=6502DA220BA34EA464756E2164756E21
+//# debugId=4D4341DD3993154664756E2164756E21
 //# sourceMappingURL=index.js.map

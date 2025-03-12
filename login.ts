@@ -1,5 +1,8 @@
 import { LitElement, TemplateResult, css, html } from "lit";
-
+import { Task } from "@lit/task";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+const ws = new WebSocket("ws://localhost:3000/ws");
+import { ulid } from "@std/ulid";
 import { customElement, state, property } from "lit/decorators.js";
 import {
   configureOAuth,
@@ -7,7 +10,10 @@ import {
   resolveFromService,
   resolveFromIdentity,
   finalizeAuthorization,
+  getSession,
+  OAuthUserAgent,
 } from "@atcute/oauth-browser-client";
+import { XRPC } from "@atcute/client";
 console.log("login");
 //  clientMetadata: `http://localhost?redirect_uri=${encodeURIComponent('http://127.0.0.1:8080/callback')}`,
 //
@@ -106,12 +112,58 @@ export class Callback extends LitElement {
 @customElement("root-")
 export class Root extends LitElement {
   static styles = css``;
+  @state() message = "";
+  private _task = new Task(this, {
+    task: async ([handle], { signal }) => {
+      const response = await fetch(`/repos/${handle}`, {
+        signal,
+      });
+      console.log(response);
+      // Call the function immediately
+      return response.json();
+    },
+    args: () => [localStorage.getItem("handle")],
+  });
   // Render the UI as a function of component state
   render() {
-    console.log("Attempting to list folders in", my_folder);
-
-    // Call the function immediately
-    listFolders();
-    return html` <div>Your repos: ${my_folder}</div> `;
+    ws.onmessage = (event) => {
+      this.message = event.data;
+    };
+    const button = html`<button
+      @click=${async () => {
+        const handle = localStorage.getItem("handle") as string;
+        const { identity } = await resolveFromIdentity(handle);
+        const session = await getSession(identity.id);
+        const agent = new OAuthUserAgent(session);
+        const rpc = new XRPC({ handler: agent });
+        const stamp = ulid();
+        const resp = await rpc.call("com.atproto.repo.putRecord", {
+          data: {
+            repo: handle,
+            collection: "nandi.schemas.gitauthorize",
+            rkey: stamp,
+            record: {
+              $type: "nandi.schemas.gitauthorize",
+              stamp,
+            },
+          },
+        });
+        console.log(resp);
+        console.log("button clicked");
+      }}
+    >
+      Ok
+    </button>`;
+    const handle = localStorage.getItem("handle");
+    return this._task.render({
+      pending: () => html`<div>Loading...</div>`,
+      complete: (result) =>
+        html`<div>
+            Hello ${handle}, your existing repos: ${JSON.stringify(result)}
+          </div>
+          ${this.message ? html`<dialog open>${button}</dialog>` : html``}`,
+      error: (e) => html`error: ${e}`,
+    });
+    // return html`test`;
   }
 }

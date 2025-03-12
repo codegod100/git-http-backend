@@ -4,6 +4,7 @@ use actix_web::web::Payload;
 use actix_web::{web, HttpRequest, HttpResponse, HttpResponseBuilder, Responder};
 use flate2::read::GzDecoder;
 use futures_util::StreamExt;
+use serde::Serialize;
 use std::io;
 use std::io::{Cursor, Read, Write};
 use std::process::{Command, Stdio};
@@ -16,6 +17,34 @@ pub async fn git_receive_pack(
 ) -> impl Responder {
     let uri = request.uri();
     let path = uri.path().to_string().replace("/git-receive-pack", "");
+    info!("Received push request for {:#?}", path);
+
+    // Extract the repository parts from the path
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let namespace = if parts.len() > 0 { parts[0] } else { "" };
+    let repo_name = if parts.len() > 1 { parts[1] } else { "" };
+    info!("Repository namespace: {}, name: {}", namespace, repo_name);
+
+    #[derive(Serialize)]
+    struct AuthData {
+        namespace: String,
+        repo_name: String,
+    }
+
+    info!("Sending authentication request");
+    // forward request to web app for authentication
+    let client = reqwest::Client::new();
+    let response = client
+        .post("http://localhost:3000/git-auth")
+        .header("Content-Type", "application/json")
+        .json(&AuthData {
+            namespace: namespace.to_string(),
+            repo_name: repo_name.to_string(),
+        })
+        .send()
+        .await;
+    info!("Status: {:#?}", response);
+
     let path = service.rewrite(path).await;
     if !path.join("HEAD").exists() || !path.join("config").exists() {
         return HttpResponse::BadRequest().body("Repository not found or invalid.");
