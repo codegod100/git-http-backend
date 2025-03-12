@@ -1460,6 +1460,66 @@ if (DEV_MODE4) {
     }
   };
 }
+var legacyProperty = (options, proto, name) => {
+  const hasOwnProperty = proto.hasOwnProperty(name);
+  proto.constructor.createProperty(name, hasOwnProperty ? { ...options, wrapped: true } : options);
+  return hasOwnProperty ? Object.getOwnPropertyDescriptor(proto, name) : undefined;
+};
+var defaultPropertyDeclaration2 = {
+  attribute: true,
+  type: String,
+  converter: defaultConverter,
+  reflect: false,
+  hasChanged: notEqual
+};
+var standardProperty = (options = defaultPropertyDeclaration2, target, context) => {
+  const { kind, metadata } = context;
+  if (DEV_MODE4 && metadata == null) {
+    issueWarning4("missing-class-metadata", `The class ${target} is missing decorator metadata. This ` + `could mean that you're using a compiler that supports decorators ` + `but doesn't support decorator metadata, such as TypeScript 5.1. ` + `Please update your compiler.`);
+  }
+  let properties = globalThis.litPropertyMetadata.get(metadata);
+  if (properties === undefined) {
+    globalThis.litPropertyMetadata.set(metadata, properties = new Map);
+  }
+  properties.set(context.name, options);
+  if (kind === "accessor") {
+    const { name } = context;
+    return {
+      set(v) {
+        const oldValue = target.get.call(this);
+        target.set.call(this, v);
+        this.requestUpdate(name, oldValue, options);
+      },
+      init(v) {
+        if (v !== undefined) {
+          this._$changeProperty(name, undefined, options);
+        }
+        return v;
+      }
+    };
+  } else if (kind === "setter") {
+    const { name } = context;
+    return function(value) {
+      const oldValue = this[name];
+      target.call(this, value);
+      this.requestUpdate(name, oldValue, options);
+    };
+  }
+  throw new Error(`Unsupported decorator location: ${kind}`);
+};
+function property(options) {
+  return (protoOrTarget, nameOrContext) => {
+    return typeof nameOrContext === "object" ? standardProperty(options, protoOrTarget, nameOrContext) : legacyProperty(options, protoOrTarget, nameOrContext);
+  };
+}
+// node_modules/@lit/reactive-element/development/decorators/state.js
+function state(options) {
+  return property({
+    ...options,
+    state: true,
+    attribute: false
+  });
+}
 // node_modules/@lit/reactive-element/development/decorators/query.js
 var DEV_MODE5 = true;
 var issueWarning5;
@@ -1473,22 +1533,185 @@ if (DEV_MODE5) {
     }
   };
 }
+// node_modules/@atcute/oauth-browser-client/dist/utils/runtime.js
+var encoder = new TextEncoder;
+var locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+
+// node_modules/@atcute/oauth-browser-client/dist/store/db.js
+var parse = (raw) => {
+  if (raw != null) {
+    const parsed = JSON.parse(raw);
+    if (parsed != null) {
+      return parsed;
+    }
+  }
+  return {};
+};
+var createOAuthDatabase = ({ name }) => {
+  const controller = new AbortController;
+  const signal = controller.signal;
+  const createStore = (subname, expiresAt, persistUpdatedAt = false) => {
+    let store;
+    const storageKey = `${name}:${subname}`;
+    const persist = () => store && localStorage.setItem(storageKey, JSON.stringify(store));
+    const read = () => {
+      if (signal.aborted) {
+        throw new Error(`store closed`);
+      }
+      return store ??= parse(localStorage.getItem(storageKey));
+    };
+    {
+      const listener = (ev) => {
+        if (ev.key === storageKey) {
+          store = undefined;
+        }
+      };
+      globalThis.addEventListener("storage", listener, { signal });
+    }
+    {
+      const cleanup = async (lock) => {
+        if (!lock || signal.aborted) {
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1e4));
+        if (signal.aborted) {
+          return;
+        }
+        let now = Date.now();
+        let changed = false;
+        read();
+        for (const key in store) {
+          const item = store[key];
+          const expiresAt2 = item.expiresAt;
+          if (expiresAt2 !== null && now > expiresAt2) {
+            changed = true;
+            delete store[key];
+          }
+        }
+        if (changed) {
+          persist();
+        }
+      };
+      if (locks) {
+        locks.request(`${storageKey}:cleanup`, { ifAvailable: true }, cleanup);
+      } else {
+        cleanup(true);
+      }
+    }
+    return {
+      get(key) {
+        read();
+        const item = store[key];
+        if (!item) {
+          return;
+        }
+        const expiresAt2 = item.expiresAt;
+        if (expiresAt2 !== null && Date.now() > expiresAt2) {
+          delete store[key];
+          persist();
+          return;
+        }
+        return item.value;
+      },
+      getWithLapsed(key) {
+        read();
+        const item = store[key];
+        const now = Date.now();
+        if (!item) {
+          return [undefined, Infinity];
+        }
+        const updatedAt = item.updatedAt;
+        if (updatedAt === undefined) {
+          return [item.value, Infinity];
+        }
+        return [item.value, now - updatedAt];
+      },
+      set(key, value) {
+        read();
+        const item = {
+          value,
+          expiresAt: expiresAt(value),
+          updatedAt: persistUpdatedAt ? Date.now() : undefined
+        };
+        store[key] = item;
+        persist();
+      },
+      delete(key) {
+        read();
+        if (store[key] !== undefined) {
+          delete store[key];
+          persist();
+        }
+      },
+      keys() {
+        read();
+        return Object.keys(store);
+      }
+    };
+  };
+  return {
+    dispose: () => {
+      controller.abort();
+    },
+    sessions: createStore("sessions", ({ token }) => {
+      if (token.refresh) {
+        return null;
+      }
+      return token.expires_at ?? null;
+    }),
+    states: createStore("states", (_item) => Date.now() + 10 * 60 * 1000),
+    dpopNonces: createStore("dpopNonces", (_item) => Date.now() + 24 * 60 * 60 * 1000, true),
+    inflightDpop: new Map
+  };
+};
+
+// node_modules/@atcute/oauth-browser-client/dist/environment.js
+var CLIENT_ID;
+var REDIRECT_URI;
+var database;
+var configureOAuth = (options) => {
+  ({ client_id: CLIENT_ID, redirect_uri: REDIRECT_URI } = options.metadata);
+  database = createOAuthDatabase({ name: options.storageName ?? "atcute-oauth" });
+};
 // login.ts
+console.log("login");
+configureOAuth({
+  metadata: {
+    client_id: `http://localhost?redirect_uri=${encodeURIComponent("http://127.0.0.1:8080/callback")}`
+  }
+});
+
 class Login extends LitElement {
+  constructor() {
+    super(...arguments);
+    this.handle = "";
+  }
   static styles = css``;
   render() {
     return html`
-      <input type="text" placeholder="Enter your atproto username" />
+      <input
+        @input=${this.handleInput}
+        type="text"
+        placeholder="Enter your atproto handle"
+      />
       <button @click="${this._submit}">Submit</button>
     `;
   }
-  _submit() {
-    console.log("Submit button clicked");
+  handleInput(event) {
+    const inputElement = event.target;
+    this.handle = inputElement.value;
+    console.log("Handle:", this.handle);
+  }
+  async _submit() {
+    console.log(this.handle);
   }
 }
+__legacyDecorateClassTS([
+  state()
+], Login.prototype, "handle", undefined);
 Login = __legacyDecorateClassTS([
   customElement("login-")
 ], Login);
-export {
-  Login
-};
+
+//# debugId=0FE848165A535D8564756E2164756E21
+//# sourceMappingURL=index.js.map
