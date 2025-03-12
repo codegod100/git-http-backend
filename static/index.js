@@ -1536,6 +1536,56 @@ if (DEV_MODE5) {
 // node_modules/@atcute/oauth-browser-client/dist/utils/runtime.js
 var encoder = new TextEncoder;
 var locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+var toBase64Url = (input) => {
+  const CHUNK_SIZE = 32768;
+  const arr = [];
+  for (let i = 0;i < input.byteLength; i += CHUNK_SIZE) {
+    arr.push(String.fromCharCode.apply(null, input.subarray(i, i + CHUNK_SIZE)));
+  }
+  return btoa(arr.join("")).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+};
+var fromBase64Url = (input) => {
+  try {
+    const binary = atob(input.replace(/-/g, "+").replace(/_/g, "/").replace(/\s/g, ""));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0;i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  } catch (err) {
+    throw new TypeError(`invalid base64url`, { cause: err });
+  }
+};
+var toSha256 = async (input) => {
+  const bytes = encoder.encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return toBase64Url(new Uint8Array(digest));
+};
+var randomBytes = (length) => {
+  return toBase64Url(crypto.getRandomValues(new Uint8Array(length)));
+};
+var generateState = () => {
+  return randomBytes(16);
+};
+var generatePKCE = async () => {
+  const verifier = randomBytes(32);
+  return {
+    verifier,
+    challenge: await toSha256(verifier),
+    method: "S256"
+  };
+};
+var lastTimestamp = 0;
+var randomString;
+var generateJti = () => {
+  if (randomString === undefined) {
+    const random = crypto.getRandomValues(new BigUint64Array(1));
+    randomString = random[0].toString(36);
+  }
+  const timestamp = Math.max(Date.now() * 1000, lastTimestamp);
+  lastTimestamp = timestamp + 1;
+  return `${timestamp.toString(36)}:${randomString}`;
+};
 
 // node_modules/@atcute/oauth-browser-client/dist/store/db.js
 var parse = (raw) => {
@@ -1673,18 +1723,599 @@ var configureOAuth = (options) => {
   ({ client_id: CLIENT_ID, redirect_uri: REDIRECT_URI } = options.metadata);
   database = createOAuthDatabase({ name: options.storageName ?? "atcute-oauth" });
 };
+// node_modules/@atcute/oauth-browser-client/dist/errors.js
+class LoginError extends Error {
+  name = "LoginError";
+}
+
+class AuthorizationError extends Error {
+  name = "AuthorizationError";
+}
+
+class ResolverError extends Error {
+  name = "ResolverError";
+}
+
+class TokenRefreshError extends Error {
+  sub;
+  name = "TokenRefreshError";
+  constructor(sub, message, options) {
+    super(message, options);
+    this.sub = sub;
+  }
+}
+
+class OAuthResponseError extends Error {
+  response;
+  data;
+  name = "OAuthResponseError";
+  error;
+  description;
+  constructor(response, data) {
+    const error = ifString(ifObject(data)?.["error"]);
+    const errorDescription = ifString(ifObject(data)?.["error_description"]);
+    const messageError = error ? `"${error}"` : "unknown";
+    const messageDesc = errorDescription ? `: ${errorDescription}` : "";
+    const message = `OAuth ${messageError} error${messageDesc}`;
+    super(message);
+    this.response = response;
+    this.data = data;
+    this.error = error;
+    this.description = errorDescription;
+  }
+  get status() {
+    return this.response.status;
+  }
+  get headers() {
+    return this.response.headers;
+  }
+}
+
+class FetchResponseError extends Error {
+  response;
+  status;
+  name = "FetchResponseError";
+  constructor(response, status, message) {
+    super(message);
+    this.response = response;
+    this.status = status;
+  }
+}
+var ifString = (v) => {
+  return typeof v === "string" ? v : undefined;
+};
+var ifObject = (v) => {
+  return typeof v === "object" && v !== null && !Array.isArray(v) ? v : undefined;
+};
+// node_modules/@atcute/client/dist/utils/did.js
+var getPdsEndpoint = (doc) => {
+  return getServiceEndpoint(doc, "#atproto_pds", "AtprotoPersonalDataServer");
+};
+var getServiceEndpoint = (doc, serviceId, serviceType) => {
+  const did = doc.id;
+  const didServiceId = did + serviceId;
+  const found = doc.service?.find((service) => service.id === serviceId || service.id === didServiceId);
+  if (!found || found.type !== serviceType || typeof found.serviceEndpoint !== "string") {
+    return;
+  }
+  return validateUrl(found.serviceEndpoint);
+};
+var validateUrl = (urlStr) => {
+  let url;
+  try {
+    url = new URL(urlStr);
+  } catch {
+    return;
+  }
+  const proto = url.protocol;
+  if (url.hostname && (proto === "http:" || proto === "https:")) {
+    return urlStr;
+  }
+};
+
+// node_modules/@atcute/oauth-browser-client/dist/constants.js
+var DEFAULT_APPVIEW_URL = "https://public.api.bsky.app";
+
+// node_modules/@atcute/oauth-browser-client/dist/utils/response.js
+var extractContentType = (headers) => {
+  return headers.get("content-type")?.split(";")[0];
+};
+
+// node_modules/@atcute/oauth-browser-client/dist/utils/strings.js
+var isUrlParseSupported = "parse" in URL;
+var isDid = (value) => {
+  return value.startsWith("did:");
+};
+var isValidUrl = (urlString) => {
+  let url = null;
+  if (isUrlParseSupported) {
+    url = URL.parse(urlString);
+  } else {
+    try {
+      url = new URL(urlString);
+    } catch {
+    }
+  }
+  if (url !== null) {
+    return url.protocol === "https:" || url.protocol === "http:";
+  }
+  return false;
+};
+
+// node_modules/@atcute/oauth-browser-client/dist/resolvers.js
+var DID_WEB_RE = /^([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*(?:\.[a-zA-Z]{2,}))$/;
+var resolveHandle = async (handle) => {
+  const url = DEFAULT_APPVIEW_URL + `/xrpc/com.atproto.identity.resolveHandle` + `?handle=${handle}`;
+  const response = await fetch(url);
+  if (response.status === 400) {
+    throw new ResolverError(`domain handle not found`);
+  } else if (!response.ok) {
+    throw new ResolverError(`directory is unreachable`);
+  }
+  const json = await response.json();
+  return json.did;
+};
+var getDidDocument = async (did) => {
+  const colon_index = did.indexOf(":", 4);
+  const type = did.slice(4, colon_index);
+  const ident = did.slice(colon_index + 1);
+  let doc;
+  if (type === "plc") {
+    const response = await fetch(`https://plc.directory/${did}`);
+    if (response.status === 404) {
+      throw new ResolverError(`did not found in directory`);
+    } else if (!response.ok) {
+      throw new ResolverError(`directory is unreachable`);
+    }
+    const json = await response.json();
+    doc = json;
+  } else if (type === "web") {
+    if (!DID_WEB_RE.test(ident)) {
+      throw new ResolverError(`invalid identifier`);
+    }
+    const response = await fetch(`https://${ident}/.well-known/did.json`);
+    if (!response.ok) {
+      throw new ResolverError(`did document is unreachable`);
+    }
+    const json = await response.json();
+    doc = json;
+  } else {
+    throw new ResolverError(`unsupported did method`);
+  }
+  return doc;
+};
+var getProtectedResourceMetadata = async (host) => {
+  const url = new URL(`/.well-known/oauth-protected-resource`, host);
+  const response = await fetch(url, {
+    redirect: "manual",
+    headers: {
+      accept: "application/json"
+    }
+  });
+  if (response.status !== 200 || extractContentType(response.headers) !== "application/json") {
+    throw new ResolverError(`unexpected response`);
+  }
+  const metadata = await response.json();
+  if (metadata.resource !== url.origin) {
+    throw new ResolverError(`unexpected issuer`);
+  }
+  return metadata;
+};
+var getAuthorizationServerMetadata = async (host) => {
+  const url = new URL(`/.well-known/oauth-authorization-server`, host);
+  const response = await fetch(url, {
+    redirect: "manual",
+    headers: {
+      accept: "application/json"
+    }
+  });
+  if (response.status !== 200 || extractContentType(response.headers) !== "application/json") {
+    throw new ResolverError(`unexpected response`);
+  }
+  const metadata = await response.json();
+  if (metadata.issuer !== url.origin) {
+    throw new ResolverError(`unexpected issuer`);
+  }
+  if (!isValidUrl(metadata.authorization_endpoint)) {
+    throw new ResolverError(`authorization server provided incorrect authorization endpoint`);
+  }
+  if (!metadata.client_id_metadata_document_supported) {
+    throw new ResolverError(`authorization server does not support 'client_id_metadata_document'`);
+  }
+  if (!metadata.pushed_authorization_request_endpoint) {
+    throw new ResolverError(`authorization server does not support 'pushed_authorization request'`);
+  }
+  if (metadata.response_types_supported) {
+    if (!metadata.response_types_supported.includes("code")) {
+      throw new ResolverError(`authorization server does not support 'code' response type`);
+    }
+  }
+  return metadata;
+};
+var resolveFromIdentity = async (ident) => {
+  let did;
+  if (isDid(ident)) {
+    did = ident;
+  } else {
+    const resolved = await resolveHandle(ident);
+    did = resolved;
+  }
+  const doc = await getDidDocument(did);
+  const pds = getPdsEndpoint(doc);
+  if (!pds) {
+    throw new ResolverError(`missing pds endpoint`);
+  }
+  return {
+    identity: {
+      id: did,
+      raw: ident,
+      pds: new URL(pds)
+    },
+    metadata: await getMetadataFromResourceServer(pds)
+  };
+};
+var getMetadataFromResourceServer = async (input) => {
+  const rs_metadata = await getProtectedResourceMetadata(input);
+  if (rs_metadata.authorization_servers?.length !== 1) {
+    throw new ResolverError(`expected exactly one authorization server in the listing`);
+  }
+  const issuer = rs_metadata.authorization_servers[0];
+  const as_metadata = await getAuthorizationServerMetadata(issuer);
+  if (as_metadata.protected_resources) {
+    if (!as_metadata.protected_resources.includes(rs_metadata.resource)) {
+      throw new ResolverError(`server is not in authorization server's jurisdiction`);
+    }
+  }
+  return as_metadata;
+};
+// node_modules/@atcute/oauth-browser-client/dist/dpop.js
+var ES256_ALG = { name: "ECDSA", namedCurve: "P-256" };
+var createES256Key = async () => {
+  const pair = await crypto.subtle.generateKey(ES256_ALG, true, ["sign", "verify"]);
+  const key = await crypto.subtle.exportKey("pkcs8", pair.privateKey);
+  const { ext: _ext, key_ops: _key_opts, ...jwk } = await crypto.subtle.exportKey("jwk", pair.publicKey);
+  return {
+    typ: "ES256",
+    key: toBase64Url(new Uint8Array(key)),
+    jwt: toBase64Url(encoder.encode(JSON.stringify({ typ: "dpop+jwt", alg: "ES256", jwk })))
+  };
+};
+var createDPoPSignage = (issuer, dpopKey) => {
+  const headerString = dpopKey.jwt;
+  const keyPromise = crypto.subtle.importKey("pkcs8", fromBase64Url(dpopKey.key), ES256_ALG, true, ["sign"]);
+  const constructPayload = (method, url, nonce, ath) => {
+    const payload = {
+      iss: issuer,
+      iat: Math.floor(Date.now() / 1000),
+      jti: generateJti(),
+      htm: method,
+      htu: url,
+      nonce,
+      ath
+    };
+    return toBase64Url(encoder.encode(JSON.stringify(payload)));
+  };
+  return async (method, url, nonce, ath) => {
+    const payloadString = constructPayload(method, url, nonce, ath);
+    const signed = await crypto.subtle.sign({ name: "ECDSA", hash: { name: "SHA-256" } }, await keyPromise, encoder.encode(headerString + "." + payloadString));
+    const signatureString = toBase64Url(new Uint8Array(signed));
+    return headerString + "." + payloadString + "." + signatureString;
+  };
+};
+var createDPoPFetch = (issuer, dpopKey, isAuthServer) => {
+  const nonces = database.dpopNonces;
+  const pending = database.inflightDpop;
+  const sign = createDPoPSignage(issuer, dpopKey);
+  return async (input, init) => {
+    const request = init == null && input instanceof Request ? input : new Request(input, init);
+    const authorizationHeader = request.headers.get("authorization");
+    const ath = authorizationHeader?.startsWith("DPoP ") ? await toSha256(authorizationHeader.slice(5)) : undefined;
+    const { method, url } = request;
+    const { origin } = new URL(url);
+    let deferred = pending.get(origin);
+    if (deferred) {
+      await deferred.promise;
+      deferred = undefined;
+    }
+    let initNonce;
+    let expiredOrMissing = false;
+    try {
+      const [nonce, lapsed] = nonces.getWithLapsed(origin);
+      initNonce = nonce;
+      expiredOrMissing = lapsed > 3 * 60 * 1000;
+    } catch {
+    }
+    if (expiredOrMissing) {
+      pending.set(origin, deferred = Promise.withResolvers());
+    }
+    let nextNonce;
+    try {
+      const initProof = await sign(method, url, initNonce, ath);
+      request.headers.set("dpop", initProof);
+      const initResponse = await fetch(request);
+      nextNonce = initResponse.headers.get("dpop-nonce");
+      if (nextNonce === null || nextNonce === initNonce) {
+        return initResponse;
+      }
+      try {
+        nonces.set(origin, nextNonce);
+      } catch {
+      }
+      const shouldRetry = await isUseDpopNonceError(initResponse, isAuthServer);
+      if (!shouldRetry) {
+        return initResponse;
+      }
+      if (input === request || init?.body instanceof ReadableStream) {
+        return initResponse;
+      }
+    } finally {
+      if (deferred) {
+        pending.delete(origin);
+        deferred.resolve();
+      }
+    }
+    {
+      const nextProof = await sign(method, url, nextNonce, ath);
+      const nextRequest = new Request(input, init);
+      nextRequest.headers.set("dpop", nextProof);
+      return await fetch(nextRequest);
+    }
+  };
+};
+var isUseDpopNonceError = async (response, isAuthServer) => {
+  if (isAuthServer === undefined || isAuthServer === false) {
+    if (response.status === 401) {
+      const wwwAuth = response.headers.get("www-authenticate");
+      if (wwwAuth?.startsWith("DPoP")) {
+        return wwwAuth.includes('error="use_dpop_nonce"');
+      }
+    }
+  }
+  if (isAuthServer === undefined || isAuthServer === true) {
+    if (response.status === 400 && extractContentType(response.headers) === "application/json") {
+      try {
+        const json = await response.clone().json();
+        return typeof json === "object" && json?.["error"] === "use_dpop_nonce";
+      } catch {
+        return false;
+      }
+    }
+  }
+  return false;
+};
+
+// node_modules/@atcute/oauth-browser-client/dist/utils/misc.js
+var pick = (obj, keys) => {
+  const cloned = {};
+  for (let idx = 0, len = keys.length;idx < len; idx++) {
+    const key = keys[idx];
+    cloned[key] = obj[key];
+  }
+  return cloned;
+};
+
+// node_modules/@atcute/oauth-browser-client/dist/agents/server-agent.js
+class OAuthServerAgent {
+  #fetch;
+  #metadata;
+  constructor(metadata, dpopKey) {
+    this.#metadata = metadata;
+    this.#fetch = createDPoPFetch(CLIENT_ID, dpopKey, true);
+  }
+  async request(endpoint, payload) {
+    const url = this.#metadata[`${endpoint}_endpoint`];
+    if (!url) {
+      throw new Error(`no endpoint for ${endpoint}`);
+    }
+    const response = await this.#fetch(url, {
+      method: "post",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...payload, client_id: CLIENT_ID })
+    });
+    if (extractContentType(response.headers) !== "application/json") {
+      throw new FetchResponseError(response, 2, `unexpected content-type`);
+    }
+    const json = await response.json();
+    if (response.ok) {
+      return json;
+    } else {
+      throw new OAuthResponseError(response, json);
+    }
+  }
+  async revoke(token) {
+    try {
+      await this.request("revocation", { token });
+    } catch {
+    }
+  }
+  async exchangeCode(code, verifier) {
+    const response = await this.request("token", {
+      grant_type: "authorization_code",
+      redirect_uri: REDIRECT_URI,
+      code,
+      code_verifier: verifier
+    });
+    try {
+      return await this.#processExchangeResponse(response);
+    } catch (err) {
+      await this.revoke(response.access_token);
+      throw err;
+    }
+  }
+  async refresh({ sub, token }) {
+    if (!token.refresh) {
+      throw new TokenRefreshError(sub, "no refresh token available");
+    }
+    const response = await this.request("token", {
+      grant_type: "refresh_token",
+      refresh_token: token.refresh
+    });
+    try {
+      if (sub !== response.sub) {
+        throw new TokenRefreshError(sub, `sub mismatch in token response; got ${response.sub}`);
+      }
+      return this.#processTokenResponse(response);
+    } catch (err) {
+      await this.revoke(response.access_token);
+      throw err;
+    }
+  }
+  #processTokenResponse(res) {
+    if (!res.sub) {
+      throw new TypeError(`missing sub field in token response`);
+    }
+    if (!res.scope) {
+      throw new TypeError(`missing scope field in token response`);
+    }
+    if (res.token_type !== "DPoP") {
+      throw new TypeError(`token response returned a non-dpop token`);
+    }
+    return {
+      scope: res.scope,
+      refresh: res.refresh_token,
+      access: res.access_token,
+      type: res.token_type,
+      expires_at: typeof res.expires_in === "number" ? Date.now() + res.expires_in * 1000 : undefined
+    };
+  }
+  async#processExchangeResponse(res) {
+    const sub = res.sub;
+    if (!sub) {
+      throw new TypeError(`missing sub field in token response`);
+    }
+    const token = this.#processTokenResponse(res);
+    const resolved = await resolveFromIdentity(sub);
+    if (resolved.metadata.issuer !== this.#metadata.issuer) {
+      throw new TypeError(`issuer mismatch; got ${resolved.metadata.issuer}`);
+    }
+    return {
+      token,
+      info: {
+        sub,
+        aud: resolved.identity.pds.href,
+        server: pick(resolved.metadata, [
+          "issuer",
+          "authorization_endpoint",
+          "introspection_endpoint",
+          "pushed_authorization_request_endpoint",
+          "revocation_endpoint",
+          "token_endpoint"
+        ])
+      }
+    };
+  }
+}
+
+// node_modules/@atcute/oauth-browser-client/dist/agents/sessions.js
+var pending = new Map;
+var storeSession = async (sub, newSession) => {
+  try {
+    database.sessions.set(sub, newSession);
+  } catch (err) {
+    await onRefreshError(newSession);
+    throw err;
+  }
+};
+var onRefreshError = async ({ dpopKey, info, token }) => {
+  const server = new OAuthServerAgent(info.server, dpopKey);
+  await server.revoke(token.refresh ?? token.access);
+};
+
+// node_modules/@atcute/oauth-browser-client/dist/agents/exchange.js
+var createAuthorizationUrl = async ({ metadata, identity, scope }) => {
+  const state3 = generateState();
+  const pkce = await generatePKCE();
+  const dpopKey = await createES256Key();
+  const params = {
+    redirect_uri: REDIRECT_URI,
+    code_challenge: pkce.challenge,
+    code_challenge_method: pkce.method,
+    state: state3,
+    login_hint: identity?.raw,
+    response_mode: "fragment",
+    response_type: "code",
+    display: "page",
+    scope
+  };
+  database.states.set(state3, {
+    dpopKey,
+    metadata,
+    verifier: pkce.verifier
+  });
+  const server = new OAuthServerAgent(metadata, dpopKey);
+  const response = await server.request("pushed_authorization_request", params);
+  const authUrl = new URL(metadata.authorization_endpoint);
+  authUrl.searchParams.set("client_id", CLIENT_ID);
+  authUrl.searchParams.set("request_uri", response.request_uri);
+  return authUrl;
+};
+var finalizeAuthorization = async (params) => {
+  const issuer = params.get("iss");
+  const state3 = params.get("state");
+  const code = params.get("code");
+  const error = params.get("error");
+  if (!state3 || !(code || error)) {
+    throw new LoginError(`missing parameters`);
+  }
+  const stored = database.states.get(state3);
+  if (stored) {
+    database.states.delete(state3);
+  } else {
+    throw new LoginError(`unknown state provided`);
+  }
+  const dpopKey = stored.dpopKey;
+  const metadata = stored.metadata;
+  if (error) {
+    throw new AuthorizationError(params.get("error_description") || error);
+  }
+  if (!code) {
+    throw new LoginError(`missing code parameter`);
+  }
+  if (issuer === null) {
+    throw new LoginError(`missing issuer parameter`);
+  } else if (issuer !== metadata.issuer) {
+    throw new LoginError(`issuer mismatch`);
+  }
+  const server = new OAuthServerAgent(metadata, dpopKey);
+  const { info, token } = await server.exchangeCode(code, stored.verifier);
+  const sub = info.sub;
+  const session = { dpopKey, info, token };
+  await storeSession(sub, session);
+  return session;
+};
 // login.ts
 console.log("login");
+var enc = encodeURIComponent;
+var url = `http://127.0.0.1:3000`;
+var meta = {
+  client_name: "nandi oauth",
+  client_id: `http://localhost?redirect_uri=${enc(`${url}/callback`)}&scope=${enc("atproto transition:generic")}`,
+  client_uri: url,
+  redirect_uri: `${url}/callback`,
+  redirect_uris: [`${url}/callback`],
+  scope: "atproto transition:generic",
+  grant_types: ["authorization_code", "refresh_token"],
+  response_types: ["code"],
+  application_type: "web",
+  token_endpoint_auth_method: "none",
+  dpop_bound_access_tokens: true
+};
 configureOAuth({
-  metadata: {
-    client_id: `http://localhost?redirect_uri=${encodeURIComponent("http://127.0.0.1:8080/callback")}`
-  }
+  metadata: meta
 });
+var hashFragment = window.location.hash.substring(1);
+if (hashFragment) {
+  const params = new URLSearchParams(hashFragment);
+  let session = await finalizeAuthorization(params);
+  console.log({ session });
+  location.href = "/";
+}
 
 class Login extends LitElement {
   constructor() {
     super(...arguments);
     this.handle = "";
+    this.authUrl = "";
   }
   static styles = css``;
   render() {
@@ -1695,6 +2326,7 @@ class Login extends LitElement {
         placeholder="Enter your atproto handle"
       />
       <button @click="${this._submit}">Submit</button>
+      <a href="${this.authUrl}">Login</a>
     `;
   }
   handleInput(event) {
@@ -1703,15 +2335,35 @@ class Login extends LitElement {
     console.log("Handle:", this.handle);
   }
   async _submit() {
-    console.log(this.handle);
+    const { identity: identity2, metadata } = await resolveFromIdentity(this.handle);
+    const authUrl = await createAuthorizationUrl({
+      metadata,
+      identity: identity2,
+      scope: "atproto transition:generic"
+    });
+    console.log(authUrl);
+    this.authUrl = authUrl.href;
   }
 }
 __legacyDecorateClassTS([
   state()
 ], Login.prototype, "handle", undefined);
+__legacyDecorateClassTS([
+  state()
+], Login.prototype, "authUrl", undefined);
 Login = __legacyDecorateClassTS([
   customElement("login-")
 ], Login);
 
-//# debugId=0FE848165A535D8564756E2164756E21
+class Callback extends LitElement {
+  static styles = css``;
+  render() {
+    return html` <h1>Callback</h1> `;
+  }
+}
+Callback = __legacyDecorateClassTS([
+  customElement("callback-")
+], Callback);
+
+//# debugId=AA7C7D618A13E4A164756E2164756E21
 //# sourceMappingURL=index.js.map
