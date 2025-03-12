@@ -1,0 +1,11 @@
+import { Hono } from "hono";
+import nunjucks from "nunjucks";
+import { serveStatic } from "@hono/node-server/serve-static";
+nunjucks.configure({ autoescape: false });
+const login_comp = `<login-></login->`;
+let login = nunjucks.render("layout.html", { component: login_comp });
+const app = new Hono();
+app.use("*", serveStatic({ root: "./static" }));
+console.log(login);
+app.get("/login", (c) => c.html(login));
+export default app;
