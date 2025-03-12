@@ -5,7 +5,10 @@ import { createBunWebSocket } from "hono/bun";
 import { serveStatic } from "@hono/node-server/serve-static";
 import config from "./config.json";
 import { html } from "lit-html";
-import { OAuthUserAgent } from "@atcute/oauth-browser-client";
+import {
+  OAuthUserAgent,
+  resolveFromIdentity,
+} from "@atcute/oauth-browser-client";
 import { CredentialManager, XRPC } from "@atcute/client";
 nunjucks.configure({ autoescape: false });
 const login_comp = `<login-></login->`;
@@ -64,9 +67,10 @@ app.post("/git-auth", async (c) => {
   // await sleep(100000);
   const data = await c.req.json();
   const handle = data.namespace;
+  const { identity, metadata } = await resolveFromIdentity(handle);
   const ws = await activeConnections.get(handle);
   ws.send("testing git auth");
-  const pds = "https://amanita.us-east.host.bsky.network";
+  const pds = identity.pds;
   const response = await new Promise(async (resolve, reject) => {
     const timer = setInterval(async () => {
       const resp = await fetch(
