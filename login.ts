@@ -1,7 +1,7 @@
 import { LitElement, TemplateResult, css, html } from "lit";
 import { Task } from "@lit/task";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-const ws = new WebSocket("ws://localhost:3000/ws");
+
 import { ulid } from "@std/ulid";
 import { customElement, state, property } from "lit/decorators.js";
 import {
@@ -126,12 +126,17 @@ export class Root extends LitElement {
   });
   // Render the UI as a function of component state
   render() {
+    const handle = localStorage.getItem("handle") as string;
+    const ws = new WebSocket("ws://localhost:3000/ws");
+    ws.onopen = () => {
+      console.log("WebSocket connection opened");
+      ws.send(handle);
+    };
     ws.onmessage = (event) => {
       this.message = event.data;
     };
     const button = html`<button
       @click=${async () => {
-        const handle = localStorage.getItem("handle") as string;
         const { identity } = await resolveFromIdentity(handle);
         const session = await getSession(identity.id);
         const agent = new OAuthUserAgent(session);
@@ -150,11 +155,12 @@ export class Root extends LitElement {
         });
         console.log(resp);
         console.log("button clicked");
+        this.message = "";
       }}
     >
       Ok
     </button>`;
-    const handle = localStorage.getItem("handle");
+    // const handle = localStorage.getItem("handle");
     return this._task.render({
       pending: () => html`<div>Loading...</div>`,
       complete: (result) =>

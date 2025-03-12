@@ -2987,7 +2987,6 @@ var extractContentLength = (headers) => {
   return Number(headers.get("content-length") ?? ";");
 };
 // login.ts
-var ws = new WebSocket("ws://localhost:3000/ws");
 console.log("login");
 var enc = encodeURIComponent;
 var url = `http://127.0.0.1:3000`;
@@ -3091,20 +3090,25 @@ class Root extends LitElement {
     args: () => [localStorage.getItem("handle")]
   });
   render() {
+    const handle = localStorage.getItem("handle");
+    const ws = new WebSocket("ws://localhost:3000/ws");
+    ws.onopen = () => {
+      console.log("WebSocket connection opened");
+      ws.send(handle);
+    };
     ws.onmessage = (event) => {
       this.message = event.data;
     };
     const button = html`<button
       @click=${async () => {
-      const handle2 = localStorage.getItem("handle");
-      const { identity: identity2 } = await resolveFromIdentity(handle2);
+      const { identity: identity2 } = await resolveFromIdentity(handle);
       const session = await getSession(identity2.id);
       const agent = new OAuthUserAgent(session);
       const rpc2 = new XRPC({ handler: agent });
       const stamp = ulid();
       const resp = await rpc2.call("com.atproto.repo.putRecord", {
         data: {
-          repo: handle2,
+          repo: handle,
           collection: "nandi.schemas.gitauthorize",
           rkey: stamp,
           record: {
@@ -3115,11 +3119,11 @@ class Root extends LitElement {
       });
       console.log(resp);
       console.log("button clicked");
+      this.message = "";
     }}
     >
       Ok
     </button>`;
-    const handle = localStorage.getItem("handle");
     return this._task.render({
       pending: () => html`<div>Loading...</div>`,
       complete: (result) => html`<div>
@@ -3137,5 +3141,5 @@ Root = __legacyDecorateClassTS([
   customElement("root-")
 ], Root);
 
-//# debugId=4D4341DD3993154664756E2164756E21
+//# debugId=AA957D38595606E264756E2164756E21
 //# sourceMappingURL=index.js.map

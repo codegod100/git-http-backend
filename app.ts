@@ -62,10 +62,10 @@ let resolver;
 
 app.post("/git-auth", async (c) => {
   // await sleep(100000);
-  const ws = await activeConnections.get("nandi.weird.one");
-
+  const data = await c.req.json();
+  const handle = data.namespace;
+  const ws = await activeConnections.get(handle);
   ws.send("testing git auth");
-  const handle = "nandi.weird.one";
   const pds = "https://amanita.us-east.host.bsky.network";
   const response = await new Promise(async (resolve, reject) => {
     const timer = setInterval(async () => {
@@ -107,8 +107,10 @@ app.get(
   upgradeWebSocket((c) => {
     let intervalId;
     return {
-      onOpen(_event, ws) {
-        activeConnections.set("nandi.weird.one", ws);
+      onOpen(_event, ws) {},
+      onMessage(event, ws) {
+        console.log("got message", event.data);
+        activeConnections.set(event.data, ws);
       },
       onClose() {},
     };
